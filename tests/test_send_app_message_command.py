@@ -3,6 +3,9 @@ Tests for the SendAppMessageCommand.
 """
 from __future__ import annotations
 
+import os
+import tempfile
+
 import pytest
 
 from pebble_tool.commands.emucontrol import SendAppMessageCommand
@@ -94,3 +97,55 @@ class TestParsePair:
     def test_invalid_bytes_value(self):
         with pytest.raises(ToolError, match="Invalid hex bytes value"):
             SendAppMessageCommand._parse_pair("0x1:bytes=ZZZZ")
+
+
+class TestParseBytesFile:
+    """Tests for SendAppMessageCommand._parse_bytes_file"""
+
+    def test_reads_file_contents(self):
+        data = b'\xDE\xAD\xBE\xEF'
+        with tempfile.NamedTemporaryFile(delete=False) as f:
+            f.write(data)
+            path = f.name
+        try:
+            key, value = SendAppMessageCommand._parse_bytes_file("0x4={}".format(path))
+            assert key == 4
+            assert isinstance(value, ByteArray)
+            assert value.value == data
+        finally:
+            os.unlink(path)
+
+    def test_hex_key(self):
+        with tempfile.NamedTemporaryFile(delete=False) as f:
+            f.write(b'\x01\x02')
+            path = f.name
+        try:
+            key, value = SendAppMessageCommand._parse_bytes_file("0xFF={}".format(path))
+            assert key == 255
+        finally:
+            os.unlink(path)
+
+    def test_filepath_with_equals(self):
+        """File paths containing '=' should be handled correctly."""
+        data = b'\x00'
+        with tempfile.NamedTemporaryFile(suffix='=test.bin', delete=False) as f:
+            f.write(data)
+            path = f.name
+        try:
+            key, value = SendAppMessageCommand._parse_bytes_file("1={}".format(path))
+            assert key == 1
+            assert value.value == data
+        finally:
+            os.unlink(path)
+
+    def test_invalid_missing_equals(self):
+        with pytest.raises(ToolError, match="Invalid --bytes-file entry"):
+            SendAppMessageCommand._parse_bytes_file("0x1")
+
+    def test_invalid_key(self):
+        with pytest.raises(ToolError, match="Invalid key"):
+            SendAppMessageCommand._parse_bytes_file("notanint=/some/path")
+
+    def test_file_not_found(self):
+        with pytest.raises(ToolError, match="Could not read bytes file"):
+            SendAppMessageCommand._parse_bytes_file("0x1=/nonexistent/path/file.bin")

@@ -518,11 +518,46 @@ class SendAppMessageCommand(PebbleCommand):
 
         return key, typed_value
 
+    @classmethod
+    def _parse_bytes_file(cls, entry):
+        """Parse a KEY=FILEPATH entry, read the file, and return (int_key, ByteArray)."""
+        try:
+            key_str, filepath = entry.split('=', 1)
+        except ValueError:
+            raise ToolError(
+                "Invalid --bytes-file entry '{}'. Expected format: KEY=FILEPATH".format(entry)
+            )
+
+        try:
+            key = int(key_str, 0)
+        except ValueError:
+            raise ToolError(
+                "Invalid key '{}' in --bytes-file entry '{}'. Key must be an integer.".format(key_str, entry)
+            )
+
+        try:
+            with open(filepath, 'rb') as fh:
+                data = fh.read()
+        except OSError as e:
+            raise ToolError("Could not read bytes file '{}': {}".format(filepath, e))
+
+        return key, ByteArray(data)
+
     def __call__(self, args):
         super(SendAppMessageCommand, self).__call__(args)
+        pairs = args.pairs
+        bytes_files = args.bytes_file or []
+
+        if not pairs and not bytes_files:
+            raise ToolError("At least one KEY:TYPE=VALUE pair or --bytes-file entry is required.")
+
         dictionary = {}
-        for pair in args.pairs:
+        for pair in pairs:
             key, typed_value = self._parse_pair(pair)
+            dictionary[key] = typed_value
+
+        for entry in bytes_files:
+            key, typed_value = self._parse_bytes_file(entry)
             dictionary[key] = typed_value
 
         try:
@@ -542,9 +577,13 @@ class SendAppMessageCommand(PebbleCommand):
     def add_parser(cls, parser):
         parser = super(SendAppMessageCommand, cls).add_parser(parser)
         parser.add_argument(
-            'pairs', nargs='+',
+            'pairs', nargs='*',
             metavar='KEY:TYPE=VALUE',
             help="Key-value pairs to send, e.g. 0x1:int=42 0x2:string=hello 0x3:bytes=DEADBEEF"
+        )
+        parser.add_argument(
+            '--bytes-file', nargs='+', metavar='KEY=FILEPATH',
+            help="Send raw bytes from a file, e.g. --bytes-file 0x4=data.bin"
         )
         parser.add_argument(
             '--uuid', default='00000000-0000-0000-0000-000000000000',

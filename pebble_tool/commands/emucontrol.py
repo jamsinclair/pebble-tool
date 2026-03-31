@@ -4,6 +4,7 @@ __author__ = 'cherie'
 import argparse
 import datetime
 import time
+import uuid as uuid_module
 
 from libpebble2.communication.transports.websocket import MessageTargetPhone, WebsocketTransport
 from libpebble2.communication.transports.websocket.protocol import AppConfigCancelled, AppConfigResponse, AppConfigSetup
@@ -12,6 +13,7 @@ from libpebble2.communication.transports.websocket.protocol import WebSocketPhon
 from libpebble2.communication.transports.qemu.protocol import *
 from libpebble2.communication.transports.qemu import MessageTargetQemu, QemuTransport
 from libpebble2.protocol.system import TimeMessage, SetUTC
+from libpebble2.services.appmessage import AppMessageService, Int32, Uint32, CString, ByteArray
 import math
 import os
 
@@ -453,4 +455,99 @@ class EmuButtonCommand(PebbleCommand):
                             help="Number of times to repeat (default: 1)")
         parser.add_argument('--interval', '-i', type=int, default=200,
                             help="Interval in ms between repeats (default: 200)")
+        return parser
+
+
+class SendAppMessageCommand(PebbleCommand):
+    """Sends an App Message key-value dictionary to the running watchapp."""
+    command = 'send-app-message'
+    valid_connections = {'emulator', 'qemu', 'phone', 'serial'}
+
+    _TYPE_MAP = {
+        'int': Int32,
+        'uint': Uint32,
+        'string': CString,
+        'cstring': CString,
+        'bytes': ByteArray,
+    }
+
+    @classmethod
+    def _parse_pair(cls, pair):
+        """Parse a single KEY:TYPE=VALUE pair and return (int_key, typed_value)."""
+        try:
+            key_type, value = pair.split('=', 1)
+        except ValueError:
+            raise ToolError("Invalid key-value pair '{}'. Expected format: KEY:TYPE=VALUE".format(pair))
+
+        try:
+            key_str, type_str = key_type.split(':', 1)
+        except ValueError:
+            raise ToolError("Invalid key-value pair '{}'. Expected format: KEY:TYPE=VALUE".format(pair))
+
+        try:
+            key = int(key_str, 0)
+        except ValueError:
+            raise ToolError("Invalid key '{}' in pair '{}'. Key must be an integer.".format(key_str, pair))
+
+        type_str = type_str.lower()
+        if type_str not in cls._TYPE_MAP:
+            raise ToolError(
+                "Invalid type '{}' in pair '{}'. Supported types: {}".format(
+                    type_str, pair, ', '.join(sorted(cls._TYPE_MAP))
+                )
+            )
+
+        value_type = cls._TYPE_MAP[type_str]
+        if value_type is Int32:
+            try:
+                typed_value = Int32(int(value, 0))
+            except ValueError:
+                raise ToolError("Invalid int value '{}' in pair '{}'.".format(value, pair))
+        elif value_type is Uint32:
+            try:
+                typed_value = Uint32(int(value, 0))
+            except ValueError:
+                raise ToolError("Invalid uint value '{}' in pair '{}'.".format(value, pair))
+        elif value_type is CString:
+            typed_value = CString(value)
+        elif value_type is ByteArray:
+            try:
+                typed_value = ByteArray(bytes.fromhex(value))
+            except ValueError:
+                raise ToolError("Invalid hex bytes value '{}' in pair '{}'.".format(value, pair))
+
+        return key, typed_value
+
+    def __call__(self, args):
+        super(SendAppMessageCommand, self).__call__(args)
+        dictionary = {}
+        for pair in args.pairs:
+            key, typed_value = self._parse_pair(pair)
+            dictionary[key] = typed_value
+
+        try:
+            target_uuid = uuid_module.UUID(args.uuid)
+        except ValueError:
+            raise ToolError("Invalid UUID format: '{}'".format(args.uuid))
+
+        service = AppMessageService(self.pebble)
+        try:
+            service.send_message(target_uuid, dictionary)
+        except IOError as e:
+            raise ToolError(str(e))
+        finally:
+            service.shutdown()
+
+    @classmethod
+    def add_parser(cls, parser):
+        parser = super(SendAppMessageCommand, cls).add_parser(parser)
+        parser.add_argument(
+            'pairs', nargs='+',
+            metavar='KEY:TYPE=VALUE',
+            help="Key-value pairs to send, e.g. 0x1:int=42 0x2:string=hello 0x3:bytes=DEADBEEF"
+        )
+        parser.add_argument(
+            '--uuid', default='00000000-0000-0000-0000-000000000000',
+            help="UUID of the target watchapp (default: all-zeros, which targets the currently running app)"
+        )
         return parser

@@ -8,95 +8,109 @@ import tempfile
 
 import pytest
 
-from pebble_tool.commands.emucontrol import SendAppMessageCommand
+from pebble_tool.commands.appmessage import SendAppMessageCommand
 from pebble_tool.exceptions import ToolError
 from libpebble2.services.appmessage import Int32, Uint32, CString, ByteArray
 
 
-class TestParsePair:
-    """Tests for SendAppMessageCommand._parse_pair"""
+class TestParseKeyValue:
+    """Tests for SendAppMessageCommand._parse_key_value"""
 
-    def test_int_decimal(self):
-        key, value = SendAppMessageCommand._parse_pair("1:int=42")
+    def test_decimal_key(self):
+        key, value = SendAppMessageCommand._parse_key_value("1=42", "int")
         assert key == 1
-        assert isinstance(value, Int32)
-        assert value.value == 42
+        assert value == "42"
 
-    def test_int_hex_key(self):
-        key, value = SendAppMessageCommand._parse_pair("0x1:int=42")
+    def test_hex_key(self):
+        key, value = SendAppMessageCommand._parse_key_value("0x1=42", "int")
         assert key == 1
-        assert isinstance(value, Int32)
-        assert value.value == 42
+        assert value == "42"
 
-    def test_int_negative(self):
-        key, value = SendAppMessageCommand._parse_pair("0x1:int=-10")
-        assert key == 1
-        assert isinstance(value, Int32)
-        assert value.value == -10
-
-    def test_uint(self):
-        key, value = SendAppMessageCommand._parse_pair("0x3:uint=100")
-        assert key == 3
-        assert isinstance(value, Uint32)
-        assert value.value == 100
-
-    def test_string(self):
-        key, value = SendAppMessageCommand._parse_pair("0x2:string=hello")
-        assert key == 2
-        assert isinstance(value, CString)
-        assert value.value == "hello"
-
-    def test_cstring(self):
-        key, value = SendAppMessageCommand._parse_pair("0x2:cstring=world")
-        assert key == 2
-        assert isinstance(value, CString)
-        assert value.value == "world"
-
-    def test_bytes(self):
-        key, value = SendAppMessageCommand._parse_pair("0x4:bytes=DEADBEEF")
-        assert key == 4
-        assert isinstance(value, ByteArray)
-        assert value.value == bytes.fromhex("DEADBEEF")
-
-    def test_string_with_equals_in_value(self):
-        key, value = SendAppMessageCommand._parse_pair("0x5:string=foo=bar")
+    def test_value_with_equals(self):
+        key, value = SendAppMessageCommand._parse_key_value("0x5=foo=bar", "string")
         assert key == 5
-        assert isinstance(value, CString)
-        assert value.value == "foo=bar"
+        assert value == "foo=bar"
 
-    def test_string_type_is_case_insensitive(self):
-        key, value = SendAppMessageCommand._parse_pair("1:INT=5")
+    def test_empty_value(self):
+        key, value = SendAppMessageCommand._parse_key_value("0x1=", "string")
         assert key == 1
-        assert isinstance(value, Int32)
-        assert value.value == 5
+        assert value == ""
 
     def test_invalid_missing_equals(self):
-        with pytest.raises(ToolError, match="Invalid key-value pair"):
-            SendAppMessageCommand._parse_pair("0x1:int")
-
-    def test_invalid_missing_colon(self):
-        with pytest.raises(ToolError, match="Invalid key-value pair"):
-            SendAppMessageCommand._parse_pair("0x1=42")
+        with pytest.raises(ToolError, match="Invalid --int entry"):
+            SendAppMessageCommand._parse_key_value("0x1", "int")
 
     def test_invalid_key(self):
         with pytest.raises(ToolError, match="Invalid key"):
-            SendAppMessageCommand._parse_pair("notanint:int=42")
+            SendAppMessageCommand._parse_key_value("notanint=42", "int")
 
-    def test_invalid_type(self):
-        with pytest.raises(ToolError, match="Invalid type"):
-            SendAppMessageCommand._parse_pair("0x1:float=3.14")
+    def test_flag_name_in_error(self):
+        with pytest.raises(ToolError, match="--uint"):
+            SendAppMessageCommand._parse_key_value("bad=value", "uint")
 
-    def test_invalid_int_value(self):
-        with pytest.raises(ToolError, match="Invalid int value"):
-            SendAppMessageCommand._parse_pair("0x1:int=notanumber")
 
-    def test_invalid_uint_value(self):
-        with pytest.raises(ToolError, match="Invalid uint value"):
-            SendAppMessageCommand._parse_pair("0x1:uint=notanumber")
+class TestIntConversion:
+    """Tests for --int flag value conversion logic in __call__"""
 
-    def test_invalid_bytes_value(self):
-        with pytest.raises(ToolError, match="Invalid hex bytes value"):
-            SendAppMessageCommand._parse_pair("0x1:bytes=ZZZZ")
+    def test_decimal(self):
+        # _parse_key_value returns str_value; conversion is int(value_str, 0)
+        key, value_str = SendAppMessageCommand._parse_key_value("1=42", "int")
+        assert Int32(int(value_str, 0)).value == 42
+
+    def test_hex_value(self):
+        key, value_str = SendAppMessageCommand._parse_key_value("0x1=0x2A", "int")
+        assert Int32(int(value_str, 0)).value == 42
+
+    def test_negative(self):
+        key, value_str = SendAppMessageCommand._parse_key_value("0x1=-10", "int")
+        assert Int32(int(value_str, 0)).value == -10
+
+    def test_invalid_value(self):
+        key, value_str = SendAppMessageCommand._parse_key_value("0x1=notanumber", "int")
+        with pytest.raises(ValueError):
+            int(value_str, 0)
+
+
+class TestUintConversion:
+    """Tests for --uint flag value conversion logic"""
+
+    def test_decimal(self):
+        key, value_str = SendAppMessageCommand._parse_key_value("0x3=100", "uint")
+        assert Uint32(int(value_str, 0)).value == 100
+
+    def test_invalid_value(self):
+        key, value_str = SendAppMessageCommand._parse_key_value("0x1=notanumber", "uint")
+        with pytest.raises(ValueError):
+            int(value_str, 0)
+
+
+class TestStringConversion:
+    """Tests for --string flag value conversion logic"""
+
+    def test_simple(self):
+        key, value_str = SendAppMessageCommand._parse_key_value("0x2=hello", "string")
+        assert CString(value_str).value == "hello"
+
+    def test_empty(self):
+        key, value_str = SendAppMessageCommand._parse_key_value("0x2=", "string")
+        assert CString(value_str).value == ""
+
+
+class TestBytesConversion:
+    """Tests for --bytes flag value conversion logic"""
+
+    def test_hex_uppercase(self):
+        key, value_str = SendAppMessageCommand._parse_key_value("0x4=DEADBEEF", "bytes")
+        assert ByteArray(bytes.fromhex(value_str)).value == bytes.fromhex("DEADBEEF")
+
+    def test_hex_lowercase(self):
+        key, value_str = SendAppMessageCommand._parse_key_value("0x4=deadbeef", "bytes")
+        assert ByteArray(bytes.fromhex(value_str)).value == b'\xde\xad\xbe\xef'
+
+    def test_invalid_value(self):
+        key, value_str = SendAppMessageCommand._parse_key_value("0x1=ZZZZ", "bytes")
+        with pytest.raises(ValueError):
+            bytes.fromhex(value_str)
 
 
 class TestParseBytesFile:

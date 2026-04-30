@@ -3,7 +3,8 @@ import uuid as uuid_module
 from libpebble2.services.appmessage import AppMessageService, Int32, Uint32, CString, ByteArray
 
 from .base import PebbleCommand
-from ..exceptions import ToolError
+from ..exceptions import ToolError, PebbleProjectException
+from ..sdk.project import PebbleProject
 
 
 class SendAppMessageCommand(PebbleCommand):
@@ -97,10 +98,18 @@ class SendAppMessageCommand(PebbleCommand):
             key, typed_value = self._parse_bytes_file(entry)
             dictionary[key] = typed_value
 
+        if args.app_uuid is not None:
+            app_uuid = args.app_uuid
+        else:
+            try:
+                app_uuid = str(PebbleProject().uuid)
+            except PebbleProjectException:
+                raise ToolError("You must either use this command from a pebble project or specify --app-uuid.")
+
         try:
-            target_uuid = uuid_module.UUID(args.uuid)
+            target_uuid = uuid_module.UUID(app_uuid)
         except ValueError:
-            raise ToolError("Invalid UUID format: '{}'".format(args.uuid))
+            raise ToolError("Invalid UUID format: '{}'".format(app_uuid))
 
         service = AppMessageService(self.pebble)
         try:
@@ -134,7 +143,7 @@ class SendAppMessageCommand(PebbleCommand):
             help="Send raw bytes from a file, e.g. --bytes-file 0x4=data.bin"
         )
         parser.add_argument(
-            '--uuid', default='00000000-0000-0000-0000-000000000000',
-            help="UUID of the target watchapp (default: all-zeros, which targets the currently running app)"
+            '--app-uuid', type=str, default=None,
+            help="UUID of the target watchapp."
         )
         return parser
